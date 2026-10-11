@@ -1,0 +1,69 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ['3.9', '3.13']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+        env:
+          PYTHONIOENCODING: utf-8
+
+  bootstrap-unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: install.sh from this checkout
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          printf '#!/bin/sh\necho "fake-codex $*"\n' > "$RUNNER_TEMP/bin/codex"
+          chmod +x "$RUNNER_TEMP/bin/codex"
+          export PATH="$RUNNER_TEMP/bin:$PATH"
+          touch ~/.bashrc
+          PANGU_SOURCE="$GITHUB_WORKSPACE" sh install.sh --shells bash
+          grep -q '>>> pangu-cli-theme >>>' ~/.bashrc
+          out=$(bash -ic 'codex --version' < /dev/null 2>/dev/null)
+          test "$out" = "fake-codex --version"
+          python3 ~/.pangu-cli-theme/install.py --uninstall
+          ! grep -q 'pangu-cli-theme' ~/.bashrc
+
+  bootstrap-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install.ps1 from this checkout
+        shell: pwsh
+        run: |
+          $bin = Join-Path $env:RUNNER_TEMP 'bin'
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          Set-Content -Path (Join-Path $bin 'codex.cmd') -Value '@echo fake-codex %*'
+          $env:PATH = "$bin;$env:PATH"
+          $env:PANGU_SOURCE = $env:GITHUB_WORKSPACE
+          ./install.ps1 --shells powershell
+          $profilePath = $PROFILE.CurrentUserCurrentHost
+          if (-not (Select-String -Path $profilePath -SimpleMatch '>>> pangu-cli-theme >>>' -Quiet)) { throw 'profile not updated' }
+          . $profilePath
+          $out = (codex --version | Out-String).Trim()
+          if ($out -ne 'fake-codex --version') { throw "unexpected: $out" }
+          python "$HOME\.pangu-cli-theme\install.py" --uninstall
+          if (Select-String -Path $profilePath -SimpleMatch 'pangu-cli-theme' -Quiet) { throw 'block left behind' }
